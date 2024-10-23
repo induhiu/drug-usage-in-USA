@@ -1,0 +1,412 @@
+---
+title: "Analysis of Drug Usage among various age groups in the United States"
+author: "Ian Nduhiu"
+output:
+  html_document:
+    fig_width: 8
+    code_folding: hide
+    highlight: tango
+    toc: true
+    toc_float:
+      collapsed: true
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(fig.width=8, fig.height=4,
+                      echo=FALSE, warning=FALSE, message=FALSE)
+```
+
+# Dataset Description
+The dataset being explored in this analysis is about drug usage among various age groups in the United States. The data was originally collected as a survey and downloaded from the fivethirtyeight Github repository. The dataset features the following variables: age groups, number of people surveyed in each age group, percentage of people in each group that use a drug for multiple drugs, and the median number of times that people in each age group used a specific drug in the last 12 months from presumably the date that the survey was done. 
+
+# Preprocessing
+This is what the original data looks like (*n* represents number of people surveyed, *drug use* columns represent the percentage of people in that age group that use the drug while *drug frequency* columns represent the median number of times that same drug was used in the last 12 months for the same age group):
+```{r echo=TRUE}
+# Set working directory
+setwd("~/Masters Grad School/CS544 - Foundations of Analytics/Final Project")
+
+# Read in data
+drug_data <- read.csv("drug-use-by-age.csv")
+head(drug_data, n = 2)
+```
+Preprocessing steps involved pivoting the data long so that each row could be its own observation per age group and drug. To do so, the dataset had to be split into two groups: one for drug usage and one for drug frequency within last 12 months. For each dataset, the columns were renamed then pivoted to produce the desired results. Finally, the two datasets were rejoined. Also, the new column recording the median number of times a drug was used in the last 12 months was typecast to a numeric column.
+```{r echo=TRUE}
+# Convert to tibble
+library(tidyverse)
+drug_data_tibble <- as_tibble(drug_data)
+
+# split into 2 dfs - use and frequency
+# use
+cnames <- colnames(drug_data_tibble)
+cnames_use <- c("age",
+                "n",
+                cnames[str_detect(cnames, "_use$")])
+drug_use <- select(drug_data_tibble, all_of(cnames_use))
+colnames(drug_use) <- str_replace(colnames(drug_use), "_use$", "")
+
+# freq
+cnames_freq <- c("age",
+                "n",
+                cnames[str_detect(cnames, "_frequency$")])
+drug_freq <- select(drug_data_tibble, all_of(cnames_freq))
+colnames(drug_freq) <- str_replace(colnames(drug_freq), "_frequency$", "")
+
+# gather each dataset separately
+drug_use_gathered <- drug_use |> 
+  gather(Drug, Percentage_That_Consume_Drug, alcohol : sedative) |>
+    mutate(Number_That_Use_Drug = round(n * Percentage_That_Consume_Drug * 0.01),
+           Number_That_Dont_Use_Drug = n - Number_That_Use_Drug)
+drug_freq_gathered <- drug_freq |> 
+  gather(Drug, Median_Num_of_times_drug_used_in_last_12_months, alcohol : sedative) |>
+    mutate(Median_Num_of_times_drug_used_in_last_12_months = as.numeric(Median_Num_of_times_drug_used_in_last_12_months))
+
+
+# rejoin the two datasets
+drug_data_combined <- drug_use_gathered |>
+  inner_join(drug_freq_gathered, by = c("age", "n", "Drug")) |>
+    select(age, n, Drug, Number_That_Use_Drug, Number_That_Dont_Use_Drug, everything())
+```
+Another preprocessing step was to check for missing values:
+```{r echo=TRUE}
+for (col in colnames(drug_data_combined)) {
+    cat(col, " - ", sum(is.na(drug_data_combined[col])), " missing values", "\n")
+}
+```
+
+Given that there were few compared to the entire dataset, the observations with null values were removed
+```{r echo=TRUE}
+drug_data_preprocessed <- drug_data_combined |>
+  drop_na(Median_Num_of_times_drug_used_in_last_12_months)
+```
+
+This is what the preprocessed data looks like:
+```{r echo=TRUE}
+head(drug_data_preprocessed)
+```
+
+# Exploratory analysis
+Let's start our exploratory analysis by looking at the number of people surveyed per age group.
+```{r echo=TRUE}
+# import the plotting library
+library(plotly)
+
+plot_ly(drug_data_preprocessed,
+        x = ~age,
+        y = ~n,
+        type = "bar") %>%
+  layout(title = "Number of people surveyed per age group",
+         yaxis = list(title = 'Number of people'))
+```
+We can see that, apart from a few groups, a mostly equal number of people were surveyed per age group. The 65+ age group had the least amount of people surveyed about their drug usage while the 35-49 age group had the most amount of people surveyed.
+
+Next, let's look at the overall popularity of each drug.
+```{r echo=TRUE}
+plot_ly(drug_data_preprocessed,
+        x = ~Drug,
+        y = ~Number_That_Use_Drug,
+        type = "bar") %>%
+  layout(title = "Number of people that use each drug",
+         yaxis = list(title = 'Number of people'))
+```
+Alcohol, marijuana and pain relievers are the most popular drugs while crack, heroin, meth and sedatives are the least popular drugs. The latter could possibly have to do with legality of the drugs, lack of easy access and more adverse health effects upon use.
+
+Let us also observe the distribution of the reported numbers of people per age group who use drugs:
+```{r echo=TRUE}
+plot_ly(drug_data_preprocessed,
+        x = ~Number_That_Use_Drug,
+        type = "histogram") %>%
+  layout(title = "Distribution of number of people per age group per drug")
+```
+We can observe that, per age group and drug, we rarely see more than 1000 drug users. Given that we saw counts in the tens of thousands per age group in an earlier barplot, this should translate to a low percentage of drug users per age group. This inference can be clearly seen in the graph below.
+```{r echo=TRUE}
+plot_ly(drug_data_preprocessed,
+        x = ~age,
+        y = ~Number_That_Use_Drug,
+        type = "bar",
+        name = "Use Drug") %>%
+  add_trace(y = ~Number_That_Dont_Use_Drug,
+            name = "Don't Use Drug") %>%
+  layout(barmode = "stack",
+        title = "Number of people that drugs per age group",
+         yaxis = list(title = 'Number of people'))
+```
+We can also explore the proportion of drug users to non-drug users per drug.
+```{r echo=TRUE}
+plot_ly(drug_data_preprocessed,
+        x = ~Drug,
+        y = ~Number_That_Use_Drug,
+        type = "bar",
+        name = "Use Drug") %>%
+  add_trace(y = ~Number_That_Dont_Use_Drug,
+            name = "Don't Use Drug") %>%
+  layout(barmode = "stack",
+        title = "Number of people that use each drug",
+         yaxis = list(title = 'Number of people'))
+```
+From the graph above, we can see that about more than half of the people surveyed about alcohol said that they consume it. This makes sense as alcohol is one of the few drugs in this list that is often consumed socially and does not have as adverse effects if used responsibly. Marijuana is a distant second, and the rest of the drugs tend to fit into the pattern we expect of a low proportion of drug users.
+
+We can also observe drug popularity per age group.
+```{r echo=TRUE}
+plot_ly(drug_data_preprocessed,
+        x = ~age,
+        y = ~Number_That_Use_Drug,
+        color = ~Drug,
+        type = "bar") %>%
+  layout(barmode = "stack",
+        title = "Number of people that use each drug",
+         yaxis = list(title = 'Number of people')) 
+```
+We can see that, by far, alcohol tends to be the most popular drug across most age groups. Older people appear to mostly only drink alcohol. A sizable amount of under-aged people also report themselves as using alcohol as well as other drugs. Marijuana appears to be the second most popular drug, especially with young adults. 
+
+The final thing we can examine is the median number of times the respondents said that they used a drug within the last 12 months.
+```{r echo=TRUE}
+plot_ly(drug_data_preprocessed,
+        x = ~Median_Num_of_times_drug_used_in_last_12_months,
+        type = "histogram") %>%
+  layout(title = "Median frequencies of drug usage in last 12 months per age group per drug")
+```
+We can see that most of the median frequencies reported are less than 20. This can be interpreted that, per age group and drug, half of the respondents only used the specific drug less than 20 times in the last 12 months from the reporting date. This could be to various reasons such as access to drug, lifestyle and health just to name a few. However, we could attempt to infer how addictive each drug is (or how addicted the respondents are) by observing this same variable across different drugs.
+```{r echo=TRUE}
+plot_ly(drug_data_preprocessed,
+        y = ~Median_Num_of_times_drug_used_in_last_12_months,
+        color = ~Drug,
+        type = "box") %>%
+layout(title = "Distribution of Medians of Number of times drug used in last 12 months",
+       yaxis = list(title = "Median Number of times"))
+```
+The drugs that stand out are heroin and stimulants where there are age groups where at least half of the drug users used the drug more than 250 times in 12 months. This translates to drug usage almost every day. 
+
+Examining the data for the heroin outlier reveals that this age group is the 35-49 age group. However, it is a tiny percentage of all the people surveyed.
+```{r echo=TRUE}
+drug_data_preprocessed |> filter((Drug == "heroin") & (Median_Num_of_times_drug_used_in_last_12_months) > 250)
+```
+Examining the data for the stimulant outlier reveals that this could possibly be a data entry error as the number of people reported as using the drug is 0.
+```{r echo=TRUE}
+drug_data_preprocessed |> filter((Drug == "stimulant") & (Median_Num_of_times_drug_used_in_last_12_months) > 300)
+```
+# Central Limit Theorem
+The Central Limit Theorem states that the distribution of sample means from samples gotten from a frame or population will become "more normal" as the sample size increases. We can test this out on our dataset using the variable *Median_Num_of_times_drug_used_in_last_12_months*. 
+
+
+Before we do sampling, let's note down the original mean and standard deviation:
+```{r echo=TRUE}
+median_var <- drug_data_preprocessed$Median_Num_of_times_drug_used_in_last_12_months
+cat(paste("Mean of median var is", round(mean(median_var),2), "and standard deviation is", round(sd(median_var), 2)))
+```
+Let's set up some samples to explore CLT.
+
+Sampling with size 5:
+```{r echo=TRUE}
+# set random seed to allow replication
+set.seed(1226)
+
+# do sampling without replacement
+samples <- 10000
+xbar <- numeric(samples)
+size <- 5
+
+for (i in 1: samples) {
+  xbar[i] <- mean(sample(median_var, size, replace = FALSE))  
+}
+
+cat("Sample size = ", size, " Mean = ", round(mean(xbar), 2),
+  " SD = ", round(sd(xbar), 2), "\n")
+
+# plot the histogram
+xbar_tibble_size5 <- as_tibble(data.frame(xbar))
+
+fig_size5 <- plot_ly(xbar_tibble_size5,
+  x = ~xbar,
+  type = "histogram",
+  name = paste("Sample Size =", size))
+```
+
+Sampling with size 10:
+```{r echo=TRUE}
+samples <- 10000
+xbar <- numeric(samples)
+size <- 10
+
+for (i in 1: samples) {
+  xbar[i] <- mean(sample(median_var, size, replace = FALSE))  
+}
+
+cat("Sample size = ", size, " Mean = ", round(mean(xbar), 2),
+  " SD = ", round(sd(xbar), 2), "\n")
+
+xbar_tibble_size10 <- as_tibble(data.frame(xbar))
+
+fig_size10 <- plot_ly(xbar_tibble_size10,
+  x = ~xbar,
+  type = "histogram",
+  name = paste("Sample Size =", size))
+```
+
+Sampling with size 20:
+```{r echo=TRUE}
+samples <- 10000
+xbar <- numeric(samples)
+size <- 20
+
+for (i in 1: samples) {
+  xbar[i] <- mean(sample(median_var, size, replace = FALSE))  
+}
+
+cat("Sample size = ", size, " Mean = ", round(mean(xbar), 2),
+  " SD = ", round(sd(xbar), 2), "\n")
+
+xbar_tibble_size20 <- as_tibble(data.frame(xbar))
+
+fig_size20 <- plot_ly(xbar_tibble_size20,
+  x = ~xbar,
+  type = "histogram",
+  name = paste("Sample Size =", size))
+```
+
+Sampling with size 40:
+```{r echo=TRUE}
+samples <- 10000
+xbar <- numeric(samples)
+size <- 40
+
+for (i in 1: samples) {
+  xbar[i] <- mean(sample(median_var, size, replace = FALSE))  
+}
+
+cat("Sample size = ", size, " Mean = ", round(mean(xbar), 2),
+  " SD = ", round(sd(xbar), 2), "\n")
+
+xbar_tibble_size40 <- as_tibble(data.frame(xbar))
+
+fig_size40 <- plot_ly(xbar_tibble_size40,
+  x = ~xbar,
+  type = "histogram",
+  name = paste("Sample Size =", size))
+```
+We can see that the means are relatively equal compared to the original mean while the standard deviations become smaller and smaller. We can also observe the latter better using the plot below:
+```{r echo=TRUE}
+fig <- subplot(fig_size5, fig_size10, fig_size20, fig_size40, nrows = 2) %>%
+  layout(title = "Central Limit Theorem: Sampling at various sizes")
+fig
+```
+
+# Sampling
+Sampling involves using a subset of the original frame or population for data analysis. Sampling can especially be useful in scenarios where one has a large dataset and not enough computing power to conduct analysis on all of the dataset. In our case, the dataset is small. We will still sample just to showcase various sampling methods.
+
+For our purposes here, let's pick a numerical variable - *Number_That_Use_Drug* - and a categorical variable - *Drug* - that we will compare the distributions of for various samples.
+
+First, let's store the plots of the original data without any sampling for future comparison purposes.
+```{r echo=TRUE}
+no_sample_hist <- plot_ly(drug_data_preprocessed,
+  x = ~Number_That_Use_Drug,
+  type = "histogram",
+  name = "No sample")
+
+no_sample_bar <- drug_data_preprocessed |> 
+  plot_ly(x = ~Drug,
+          y = ~Number_That_Use_Drug,
+          type = "bar",
+          name = "No sample")
+```
+
+Simple Random Sampling Without Replacement:
+```{r echo=TRUE}
+# import sampling
+library(sampling)
+set.seed(1226)
+
+# sampling
+sample.size <- 50
+
+s <- srswor(sample.size, nrow(drug_data_preprocessed))
+
+sample_1 <- drug_data_preprocessed[s != 0, ]
+
+# histogram and bar plots
+srswor_sample_hist <- plot_ly(sample_1,
+  x = ~Number_That_Use_Drug,
+  type = "histogram",
+  name = "SRSWOR")
+
+srswor_sample_barplot <- drug_data_preprocessed |> 
+  plot_ly(x = ~Drug,
+          y = ~Number_That_Use_Drug,
+          type = "bar",
+          name = "SRSWOR")
+```
+
+Systematic Sampling:
+```{r echo=TRUE}
+set.seed(1226)
+
+pik <- inclusionprobabilities(drug_data_preprocessed$Number_That_Use_Drug, 
+                              sample.size)
+
+s <- UPsystematic(pik)
+sample_2 <- drug_data_preprocessed[s != 0, ]
+
+systematic_sample_hist <- plot_ly(sample_2,
+  x = ~Number_That_Use_Drug,
+  type = "histogram",
+  name = "systematic")
+
+systematic_sample_barplot <- drug_data_preprocessed |> 
+  plot_ly(x = ~Drug,
+          y = ~Number_That_Use_Drug,
+          type = "bar",
+          name = "Systematic")
+```
+
+Stratified Sampling:
+```{r echo=TRUE}
+set.seed(1226)
+
+order.index <- order(drug_data_preprocessed$age)
+drugs_ordered <- drug_data_preprocessed[order.index, ]
+
+drugs_proportions <- prop.table(table(drugs_ordered$age))
+st.sizes <- sample.size * drugs_proportions
+
+st <- sampling::strata(drugs_ordered,
+                       stratanames = c("age"),
+                       size = st.sizes,
+                       method = "srswor")
+sample_3 <- sampling::getdata(drugs_ordered, st)
+
+stratified_sample_hist <- plot_ly(sample_3,
+  x = ~Number_That_Use_Drug,
+  type = "histogram",
+  name = "stratified")
+
+stratified_sample_barplot <- drug_data_preprocessed |> 
+  plot_ly(x = ~Drug,
+          y = ~Number_That_Use_Drug,
+          type = "bar",
+          name = "Stratified")
+```
+
+Finally, let's plot all the saved plots together to compare the sampling methods:
+```{r echo=TRUE}
+fig <- subplot(no_sample_hist, 
+               srswor_sample_hist, 
+               systematic_sample_hist, 
+               stratified_sample_hist, nrows = 2) %>%
+  layout(title = "Number of people using drugs at each age group")
+fig
+```
+
+```{r echo=TRUE}
+fig <- subplot(no_sample_bar, 
+               srswor_sample_barplot, 
+               systematic_sample_barplot, 
+               stratified_sample_barplot, nrows = 2) %>%
+  layout(title = "Number of people using drugs at each age group")
+fig
+```
+The distributions for both variables across all samples appear to be quite similar. That could be mostly attributed to the nature of the data as it was already somewhat aggregated by the surveyors.
+
+# Conclusions
+In general, we can see that drug usage is not that popular across all the age groups surveyed. Among the small population of drug users, alcohol is the most popular drug. It is even popular with under-aged groups, which is quite concerning as this is technically illegal. This is perhaps an area of further study to see how such groups get access to drugs, how often they use them and so on. Also, given access to trend data, it would be interesting to observe the popularity of marijuana and pain relievers over time given the ongoing marijuana legalization across states and opioid crisis respectively.
+
+Another interesting facet that could be explored is how addictive each drug is or how addicted people are to certain drugs. Most people report scarce usage of drugs within a year. However, from our analysis, there are some age groups that report high frequency of drug usage within a year from which we can infer that they are probably cases of addiction. Additionally, heroin is observed to be the drug that has some of the highest reported frequency of drug usage within a year. Bigger survey groups and additional data collected could allow for a more exhaustive study on addiction.
